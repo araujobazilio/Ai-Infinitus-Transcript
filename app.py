@@ -57,7 +57,7 @@ def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
             comando, 
             capture_output=True, 
             text=True,
-            timeout=300  # Timeout de 5 minutos
+            timeout=1800  # Timeout de 30 minutos para arquivos grandes
         )
         
         if resultado.returncode == 0:
@@ -66,7 +66,7 @@ def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
             return False, f"Erro FFmpeg: {resultado.stderr}"
             
     except subprocess.TimeoutExpired:
-        return False, "Timeout: Vídeo muito longo para processar"
+        return False, "Timeout: Vídeo muito longo para processar (limite: 30 minutos)"
     except Exception as e:
         return False, f"Erro inesperado: {str(e)}"
 
@@ -78,11 +78,15 @@ def transcreve_tab_video():
     arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
     
     if arquivo_video is not None:
-        # Verifica tamanho do arquivo (limite de 200MB)
+        # Verifica tamanho do arquivo (limite de 1GB)
         tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
-        if tamanho_mb > 200:
-            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 200MB")
+        if tamanho_mb > 1024:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 1GB (1024MB)")
             return
+        
+        # Aviso para arquivos grandes
+        if tamanho_mb > 500:
+            st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
         
         with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
             try:
