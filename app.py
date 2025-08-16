@@ -1,15 +1,9 @@
 from pathlib import Path
-import queue
-import time
-
 import streamlit as st
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
-
 import openai
-import pydub
-from moviepy import VideoFileClip
 from dotenv import load_dotenv, find_dotenv
 import os
+import tempfile
 
 # Carrega as variáveis de ambiente
 _ = load_dotenv(find_dotenv())
@@ -17,8 +11,6 @@ _ = load_dotenv(find_dotenv())
 PASTA_TEMP = Path(__file__).parent / 'temp'
 PASTA_TEMP.mkdir(exist_ok=True)
 ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
-ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
-ARQUIVO_MIC_TEMP = PASTA_TEMP / 'mic.mp3'
 
 # Inicializa o cliente OpenAI com a chave API
 api_key = os.getenv('OPENAI_API_KEY')
@@ -28,111 +20,96 @@ if not api_key:
 
 client = openai.OpenAI(api_key=api_key)
 
-def transcreve_audio(caminho_audio, prompt):
-    with open(caminho_audio, 'rb') as arquivo_audio:
-        transcricao = client.audio.transcriptions.create(
-            model='whisper-1',
-            language='pt',
-            response_format='text',
-            file=arquivo_audio,
-            prompt=prompt,
-        )
-        return transcricao
-
-if not 'transcricao_mic' in st.session_state:
-    st.session_state['transcricao_mic'] = ''
-
-@st.cache_data
-def get_ice_servers():
-    return [{'urls': ['stun:stun.l.google.com:19302']}]
-
-
-def adiciona_chunck_de_audio(frames_de_audio, chunck_audio):
-    for frame in frames_de_audio:
-        sound = pydub.AudioSegment(
-            data=frame.to_ndarray().tobytes(),
-            sample_width=frame.format.bytes,
-            frame_rate=frame.sample_rate,
-            channels=len(frame.layout.channels)
-        )
-        chunck_audio += sound
-    return chunck_audio
-
-def transcreve_tab_mic():
-    prompt_mic = st.text_input('(opcional) Digite o seu prompt', key='input_mic')
-    webrtx_ctx = webrtc_streamer(
-        key='recebe_audio',
-        mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=1024,
-        media_stream_constraints={'video': False, 'audio':True}
+def transcreve_audio(arquivo_audio, prompt):
+    """Transcreve áudio usando a API da OpenAI"""
+    transcricao = client.audio.transcriptions.create(
+        model='whisper-1',
+        language='pt',
+        response_format='text',
+        file=arquivo_audio,
+        prompt=prompt,
     )
-
-    if not webrtx_ctx.state.playing:
-        st.write(st.session_state['transcricao_mic'])
-        return
-    
-    container = st.empty()
-    container.markdown('Comece a falar...')
-    chunck_audio = pydub.AudioSegment.empty()
-    tempo_ultima_transcricao = time.time()
-    st.session_state['transcricao_mic'] = ''
-    while True:
-        if webrtx_ctx.audio_receiver:
-            try:
-                frames_de_audio = webrtx_ctx.audio_receiver.get_frames(timeout=1)
-            except queue.Empty:
-                time.sleep(0.1)
-                continue
-            chunck_audio = adiciona_chunck_de_audio(frames_de_audio, chunck_audio)
-
-            agora = time.time()
-            if len(chunck_audio) > 0 and agora - tempo_ultima_transcricao > 10:
-                tempo_ultima_transcricao = agora
-                chunck_audio.export(ARQUIVO_MIC_TEMP)
-                transcricao = transcreve_audio(ARQUIVO_MIC_TEMP, prompt_mic)
-                st.session_state['transcricao_mic'] += transcricao
-                container.write(st.session_state['transcricao_mic'])
-                chunck_audio = pydub.AudioSegment.empty()
-        else:
-            break
-
-
-# TRANSCREVE VIDEO =====================================
-def _salva_audio_do_video(video_bytes):
-    with open(ARQUIVO_VIDEO_TEMP, mode='wb') as video_f:
-        video_f.write(video_bytes.read())
-    moviepy_video = VideoFileClip(str(ARQUIVO_VIDEO_TEMP))
-    moviepy_video.audio.write_audiofile(str(ARQUIVO_AUDIO_TEMP))
+    return transcricao
 
 def transcreve_tab_video():
-    prompt_input = st.text_input('(opcional) Digite o seu prompt', key='input_video')
-    arquivo_video = st.file_uploader('Adicione um arquivo de vídeo .mp4', type=['mp4'])
-    if not arquivo_video is None:
-        _salva_audio_do_video(arquivo_video)
-        transcricao = transcreve_audio(ARQUIVO_AUDIO_TEMP, prompt_input)
-        st.write(transcricao)
+    """Aba para transcrição de vídeos"""
+    st.info("📹 Faça upload de um arquivo de vídeo (.mp4, .mov, .avi) para extrair e transcrever o áudio")
+    
+    prompt_input = st.text_input('(opcional) Digite um prompt para melhorar a transcrição', key='input_video')
+    arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi'])
+    
+    if arquivo_video is not None:
+        with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
+            try:
+                # Salva o vídeo temporariamente
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
+                    temp_video.write(arquivo_video.read())
+                    temp_video_path = temp_video.name
+                
+                # Usa moviepy para extrair áudio
+                try:
+                    from moviepy.editor import VideoFileClip
+                    video = VideoFileClip(temp_video_path)
+                    
+                    # Extrai áudio para arquivo temporário
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_audio:
+                        temp_audio_path = temp_audio.name
+                    
+                    video.audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                    video.close()
+                    
+                    # Transcreve o áudio
+                    with open(temp_audio_path, 'rb') as audio_file:
+                        transcricao = transcreve_audio(audio_file, prompt_input)
+                    
+                    st.success("✅ Transcrição concluída!")
+                    st.write("### Resultado:")
+                    st.write(transcricao)
+                    
+                    # Limpa arquivos temporários
+                    os.unlink(temp_video_path)
+                    os.unlink(temp_audio_path)
+                    
+                except ImportError:
+                    st.error("❌ MoviePy não está disponível. Use a aba de áudio para transcrever arquivos de áudio diretamente.")
+                except Exception as e:
+                    st.error(f"❌ Erro ao processar vídeo: {str(e)}")
+                    
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar vídeo: {str(e)}")
 
 # TRANSCREVE AUDIO =====================================
 def transcreve_tab_audio():
-    prompt_input = st.text_input('(opcional) Digite o seu prompt', key='input_audio')
-    arquivo_audio = st.file_uploader('Adicione um arquivo de áudio .mp3', type=['mp3'])
-    if not arquivo_audio is None:
-        transcricao = client.audio.transcriptions.create(
-            model='whisper-1',
-            language='pt',
-            response_format='text',
-            file=arquivo_audio,
-            prompt=prompt_input
-        )
-        st.write(transcricao)
+    """Aba para transcrição de arquivos de áudio"""
+    st.info("🎵 Faça upload de um arquivo de áudio (.mp3, .wav, .m4a) para transcrição")
+    
+    prompt_input = st.text_input('(opcional) Digite um prompt para melhorar a transcrição', key='input_audio')
+    arquivo_audio = st.file_uploader('Selecione um arquivo de áudio', type=['mp3', 'wav', 'm4a', 'ogg'])
+    
+    if arquivo_audio is not None:
+        with st.spinner('🎵 Transcrevendo áudio...'):
+            try:
+                transcricao = transcreve_audio(arquivo_audio, prompt_input)
+                st.success("✅ Transcrição concluída!")
+                st.write("### Resultado:")
+                st.write(transcricao)
+            except Exception as e:
+                st.error(f"❌ Erro ao transcrever áudio: {str(e)}")
 
 # MAIN =====================================
 def main():
-    st.header('Bem-vindo ao Ai Infinitus Transcript🎙️', divider=True)
-    st.markdown('#### Transcreva áudio do microfone, de vídeos e de arquivos de áudio')
-    tab_mic, tab_video, tab_audio = st.tabs(['Microfone', 'Vídeo', 'Áudio'])
-    with tab_mic:
-        transcreve_tab_mic()
+    st.set_page_config(
+        page_title="Ai Infinitus Transcript",
+        page_icon="🎙️",
+        layout="wide"
+    )
+    
+    st.header('Bem-vindo ao Ai Infinitus Transcript 🎙️', divider=True)
+    st.markdown('#### Transcreva áudio de vídeos e arquivos de áudio usando IA')
+    
+    # Removemos a aba de microfone para evitar problemas com audioop/pyaudioop
+    tab_video, tab_audio = st.tabs(['📹 Vídeo', '🎵 Áudio'])
+    
     with tab_video:
         transcreve_tab_video()
     with tab_audio:

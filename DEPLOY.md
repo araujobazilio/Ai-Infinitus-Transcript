@@ -1,20 +1,27 @@
 # Deploy no Streamlit Cloud
 
-## Problema Resolvido: pyaudioop
+## Problemas Resolvidos: audioop e pyaudioop
 
-O erro `No module named 'pyaudioop'` ocorre porque o Python 3.13 removeu este módulo que é usado pelo `pydub`.
+Os erros `No module named 'audioop'` e `No module named 'pyaudioop'` ocorrem porque o Python 3.13 removeu estes módulos que eram usados pelo `pydub` e `streamlit_webrtc`.
 
 ## Solução Implementada
 
-1. **`.python-version`** - Especifica Python 3.11 para o ambiente
-2. **`runtime.txt`** - Define a versão exata do Python (3.11.9) 
-3. **`packages.txt`** - Instala ffmpeg necessário para processamento de áudio
+### 1. Versão Simplificada da Aplicação
+- **Removida funcionalidade de microfone** (que dependia de audioop/pyaudioop)
+- **Mantidas funcionalidades principais**: transcrição de arquivos de áudio e vídeo
+- **Dependências reduzidas**: removido `pydub`, `streamlit_webrtc`, `ipykernel`
 
-## Arquivos de Configuração Criados
+### 2. Arquivos de Configuração
+- **`.python-version`**: Especifica Python 3.11
+- **`runtime.txt`**: Define Python 3.11 para o Streamlit Cloud
+- **`packages.txt`**: Instala ffmpeg para processamento de vídeo
+- **`requirements.txt`**: Dependências mínimas compatíveis
 
-- `.python-version`: Força uso do Python 3.11
-- `runtime.txt`: Versão específica para deploy
-- `packages.txt`: Dependências do sistema (ffmpeg)
+## Funcionalidades Disponíveis
+
+✅ **Transcrição de Arquivos de Áudio** (.mp3, .wav, .m4a, .ogg)  
+✅ **Transcrição de Vídeos** (.mp4, .mov, .avi) - extrai áudio automaticamente  
+❌ **Gravação de Microfone** - removida temporariamente devido a incompatibilidades
 
 ## Configuração da API Key
 
@@ -24,6 +31,6 @@ No Streamlit Cloud, adicione a variável de ambiente:
 
 ## Deploy
 
-1. Faça commit e push dos novos arquivos
-2. No Streamlit Cloud, configure a variável de ambiente
-3. O deploy deve funcionar com Python 3.11
+1. Faça commit e push dos arquivos atualizados
+2. No Streamlit Cloud, configure a variável de ambiente `OPENAI_API_KEY`
+3. O deploy deve funcionar sem erros de módulos ausentes
