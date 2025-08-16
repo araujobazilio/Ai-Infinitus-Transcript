@@ -1,36 +1,43 @@
 # Deploy no Streamlit Cloud
 
-## Problemas Resolvidos: audioop e pyaudioop
+## Problemas Resolvidos
 
-Os erros `No module named 'audioop'` e `No module named 'pyaudioop'` ocorrem porque o Python 3.13 removeu estes módulos que eram usados pelo `pydub` e `streamlit_webrtc`.
+### 1. Módulos Removidos no Python 3.13
+- `No module named 'audioop'`
+- `No module named 'pyaudioop'` 
+- Problemas com `MoviePy` no ambiente de deploy
 
-## Solução Implementada
+### 2. Solução: Aplicação Ultra-Simplificada
+- **Apenas transcrição de arquivos de áudio**
+- **Dependências mínimas**: `openai`, `streamlit`, `python-dotenv`
+- **Sem processamento de vídeo ou microfone**
 
-### 1. Versão Simplificada da Aplicação
-- **Removida funcionalidade de microfone** (que dependia de audioop/pyaudioop)
-- **Mantidas funcionalidades principais**: transcrição de arquivos de áudio e vídeo
-- **Dependências reduzidas**: removido `pydub`, `streamlit_webrtc`, `ipykernel`
+## Arquivos de Configuração
 
-### 2. Arquivos de Configuração
-- **`.python-version`**: Especifica Python 3.11
-- **`runtime.txt`**: Define Python 3.11 para o Streamlit Cloud
-- **`packages.txt`**: Instala ffmpeg para processamento de vídeo
-- **`requirements.txt`**: Dependências mínimas compatíveis
+- **`.python-version`**: Python 3.11
+- **`runtime.txt`**: Python 3.11 para Streamlit Cloud
+- **`requirements.txt`**: Apenas 3 dependências essenciais
+- **`packages.txt`**: ffmpeg (mantido para futuras expansões)
 
 ## Funcionalidades Disponíveis
 
 ✅ **Transcrição de Arquivos de Áudio** (.mp3, .wav, .m4a, .ogg)  
-✅ **Transcrição de Vídeos** (.mp4, .mov, .avi) - extrai áudio automaticamente  
-❌ **Gravação de Microfone** - removida temporariamente devido a incompatibilidades
+📋 **Orientações para Vídeos** - guia para extrair áudio manualmente  
+❌ **Processamento Automático de Vídeo** - removido  
+❌ **Gravação de Microfone** - removido
 
 ## Configuração da API Key
 
-No Streamlit Cloud, adicione a variável de ambiente:
+No Streamlit Cloud:
 - **Nome**: `OPENAI_API_KEY`
 - **Valor**: Sua chave API da OpenAI
 
 ## Deploy
 
-1. Faça commit e push dos arquivos atualizados
-2. No Streamlit Cloud, configure a variável de ambiente `OPENAI_API_KEY`
-3. O deploy deve funcionar sem erros de módulos ausentes
+1. Commit e push dos arquivos finais
+2. Configure a variável `OPENAI_API_KEY` no Streamlit Cloud
+3. Deploy deve funcionar sem erros
+
+## Versão Estável
+
+Esta versão prioriza **estabilidade e compatibilidade** sobre funcionalidades avançadas, garantindo que o deploy funcione consistentemente no Streamlit Cloud.

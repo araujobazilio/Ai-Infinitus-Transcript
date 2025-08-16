@@ -32,51 +32,23 @@ def transcreve_audio(arquivo_audio, prompt):
     return transcricao
 
 def transcreve_tab_video():
-    """Aba para transcrição de vídeos"""
-    st.info("📹 Faça upload de um arquivo de vídeo (.mp4, .mov, .avi) para extrair e transcrever o áudio")
+    """Aba para orientações sobre vídeos"""
+    st.info("📹 Para transcrever vídeos, primeiro extraia o áudio usando um conversor online")
     
-    prompt_input = st.text_input('(opcional) Digite um prompt para melhorar a transcrição', key='input_video')
-    arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi'])
+    st.markdown("""
+    ### Como transcrever vídeos:
     
-    if arquivo_video is not None:
-        with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
-            try:
-                # Salva o vídeo temporariamente
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
-                    temp_video.write(arquivo_video.read())
-                    temp_video_path = temp_video.name
-                
-                # Usa moviepy para extrair áudio
-                try:
-                    from moviepy.editor import VideoFileClip
-                    video = VideoFileClip(temp_video_path)
-                    
-                    # Extrai áudio para arquivo temporário
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_audio:
-                        temp_audio_path = temp_audio.name
-                    
-                    video.audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
-                    video.close()
-                    
-                    # Transcreve o áudio
-                    with open(temp_audio_path, 'rb') as audio_file:
-                        transcricao = transcreve_audio(audio_file, prompt_input)
-                    
-                    st.success("✅ Transcrição concluída!")
-                    st.write("### Resultado:")
-                    st.write(transcricao)
-                    
-                    # Limpa arquivos temporários
-                    os.unlink(temp_video_path)
-                    os.unlink(temp_audio_path)
-                    
-                except ImportError:
-                    st.error("❌ MoviePy não está disponível. Use a aba de áudio para transcrever arquivos de áudio diretamente.")
-                except Exception as e:
-                    st.error(f"❌ Erro ao processar vídeo: {str(e)}")
-                    
-            except Exception as e:
-                st.error(f"❌ Erro ao carregar vídeo: {str(e)}")
+    1. **Extraia o áudio do vídeo** usando uma dessas opções:
+       - [Online Audio Converter](https://online-audio-converter.com/)
+       - [CloudConvert](https://cloudconvert.com/mp4-to-mp3)
+       - [Convertio](https://convertio.co/mp4-mp3/)
+    
+    2. **Faça upload do arquivo de áudio** na aba "🎵 Áudio"
+    
+    3. **Aguarde a transcrição** ser processada
+    """)
+    
+    st.warning("⚠️ A funcionalidade de processamento automático de vídeo foi temporariamente desabilitada para garantir compatibilidade com o ambiente de deploy.")
 
 # TRANSCREVE AUDIO =====================================
 def transcreve_tab_audio():
