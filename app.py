@@ -4,6 +4,8 @@ import openai
 from dotenv import load_dotenv, find_dotenv
 import os
 import tempfile
+import subprocess
+import shutil
 
 # Carrega as variáveis de ambiente
 _ = load_dotenv(find_dotenv())
@@ -31,24 +33,107 @@ def transcreve_audio(arquivo_audio, prompt):
     )
     return transcricao
 
+def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
+    """Extrai áudio de vídeo usando FFmpeg"""
+    try:
+        # Verifica se FFmpeg está disponível
+        if not shutil.which('ffmpeg'):
+            return False, "FFmpeg não encontrado no sistema"
+        
+        # Comando FFmpeg para extrair áudio
+        comando = [
+            'ffmpeg',
+            '-i', caminho_video,
+            '-vn',  # Sem vídeo
+            '-acodec', 'mp3',  # Codec de áudio MP3
+            '-ab', '192k',  # Bitrate
+            '-ar', '44100',  # Sample rate
+            '-y',  # Sobrescrever arquivo se existir
+            caminho_audio
+        ]
+        
+        # Executa o comando
+        resultado = subprocess.run(
+            comando, 
+            capture_output=True, 
+            text=True,
+            timeout=300  # Timeout de 5 minutos
+        )
+        
+        if resultado.returncode == 0:
+            return True, "Áudio extraído com sucesso"
+        else:
+            return False, f"Erro FFmpeg: {resultado.stderr}"
+            
+    except subprocess.TimeoutExpired:
+        return False, "Timeout: Vídeo muito longo para processar"
+    except Exception as e:
+        return False, f"Erro inesperado: {str(e)}"
+
 def transcreve_tab_video():
-    """Aba para orientações sobre vídeos"""
-    st.info("📹 Para transcrever vídeos, primeiro extraia o áudio usando um conversor online")
+    """Aba para transcrição de vídeos"""
+    st.info("📹 Faça upload de um arquivo de vídeo para extrair o áudio e transcrever automaticamente")
     
-    st.markdown("""
-    ### Como transcrever vídeos:
+    prompt_input = st.text_input('(opcional) Digite um prompt para melhorar a transcrição', key='input_video')
+    arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
     
-    1. **Extraia o áudio do vídeo** usando uma dessas opções:
-       - [Online Audio Converter](https://online-audio-converter.com/)
-       - [CloudConvert](https://cloudconvert.com/mp4-to-mp3)
-       - [Convertio](https://convertio.co/mp4-mp3/)
-    
-    2. **Faça upload do arquivo de áudio** na aba "🎵 Áudio"
-    
-    3. **Aguarde a transcrição** ser processada
-    """)
-    
-    st.warning("⚠️ A funcionalidade de processamento automático de vídeo foi temporariamente desabilitada para garantir compatibilidade com o ambiente de deploy.")
+    if arquivo_video is not None:
+        # Verifica tamanho do arquivo (limite de 200MB)
+        tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
+        if tamanho_mb > 200:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 200MB")
+            return
+        
+        with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
+            try:
+                # Cria arquivos temporários
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
+                    temp_video.write(arquivo_video.getvalue())
+                    temp_video_path = temp_video.name
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_audio:
+                    temp_audio_path = temp_audio.name
+                
+                # Extrai áudio usando FFmpeg
+                sucesso, mensagem = extrair_audio_com_ffmpeg(temp_video_path, temp_audio_path)
+                
+                if sucesso:
+                    st.success("✅ Áudio extraído com sucesso!")
+                    
+                    # Transcreve o áudio
+                    with st.spinner('🎵 Transcrevendo áudio...'):
+                        with open(temp_audio_path, 'rb') as audio_file:
+                            transcricao = transcreve_audio(audio_file, prompt_input)
+                        
+                        st.success("✅ Transcrição concluída!")
+                        st.write("### Resultado:")
+                        st.write(transcricao)
+                        
+                        # Opção para download do áudio extraído
+                        with open(temp_audio_path, 'rb') as audio_file:
+                            st.download_button(
+                                label="📥 Download do áudio extraído",
+                                data=audio_file.read(),
+                                file_name=f"audio_{arquivo_video.name}.mp3",
+                                mime="audio/mpeg"
+                            )
+                else:
+                    st.error(f"❌ Erro ao extrair áudio: {mensagem}")
+                    st.info("💡 Tente converter o vídeo online e usar a aba de áudio:")
+                    st.markdown("""
+                    - [Online Audio Converter](https://online-audio-converter.com/)
+                    - [CloudConvert](https://cloudconvert.com/mp4-to-mp3)
+                    """)
+                
+                # Limpa arquivos temporários
+                try:
+                    os.unlink(temp_video_path)
+                    os.unlink(temp_audio_path)
+                except:
+                    pass
+                    
+            except Exception as e:
+                st.error(f"❌ Erro ao processar vídeo: {str(e)}")
 
 # TRANSCREVE AUDIO =====================================
 def transcreve_tab_audio():
