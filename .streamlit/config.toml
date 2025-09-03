@@ -1,0 +1,15 @@
+[server]
+# Configurações para otimizar o Streamlit Cloud
+fileWatcherType = "none"
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+[global]
+developmentMode = false
+
+[theme]
+base = "light"
