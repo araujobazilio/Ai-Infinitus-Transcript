@@ -6,6 +6,9 @@ import os
 import tempfile
 import subprocess
 import shutil
+import json
+import html
+from typing import Any, Dict, List
 
 # Carrega as variáveis de ambiente
 _ = load_dotenv(find_dotenv())
@@ -21,6 +24,178 @@ if not api_key:
     st.stop()
 
 client = openai.OpenAI(api_key=api_key)
+
+def _parse_json_safe(s: str) -> Dict[str, Any]:
+    try:
+        return json.loads(s)
+    except Exception:
+        start = s.find('{')
+        end = s.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(s[start:end+1])
+            except Exception:
+                pass
+        return {}
+
+def gerar_conteudo_social(
+    transcricao: str,
+    plataforma: str = "Instagram",
+    tom: str = "engajador",
+    tamanho_legenda: str = "média",
+    qtd_hashtags: int = 15,
+) -> Dict[str, Any]:
+    if not isinstance(transcricao, str):
+        raise ValueError("transcricao inválida")
+    texto = transcricao.strip()
+    if not texto:
+        raise ValueError("transcricao vazia")
+    limite = 8000
+    if len(texto) > limite:
+        texto = texto[:limite]
+    plataformas_validas: List[str] = [
+        "Instagram",
+        "TikTok",
+        "YouTube Shorts",
+        "LinkedIn",
+        "Facebook",
+        "X/Twitter",
+        "Threads",
+    ]
+    if plataforma not in plataformas_validas:
+        plataforma = "Instagram"
+    if tamanho_legenda not in ["curta", "média", "media", "longa"]:
+        tamanho_legenda = "média"
+    if tamanho_legenda == "media":
+        tamanho_legenda = "média"
+    if not isinstance(qtd_hashtags, int) or qtd_hashtags < 3:
+        qtd_hashtags = 10
+    if qtd_hashtags > 30:
+        qtd_hashtags = 30
+    instrucao = (
+        "Gere conteúdo para redes sociais em pt-BR com base na transcrição fornecida. "
+        "Adapte ao contexto da plataforma, mantendo alto potencial de engajamento e clareza. "
+        "Respeite o tamanho da legenda solicitado e a quantidade de hashtags. "
+        "Retorne exclusivamente um objeto JSON com as chaves: "
+        "titulo (string), legenda (string), hashtags (array de strings). "
+        "Regras: "
+        f"plataforma={plataforma}; tom={tom}; tamanho_legenda={tamanho_legenda}; qtd_hashtags={qtd_hashtags}. "
+        "Use hashtags relevantes, em minúsculas e sem acentos, com prefixo '#', sem espaços. "
+        "Evite clickbait enganoso; foque no benefício e na curiosidade legítima."
+    )
+    modelo = os.getenv("OPENAI_CONTENT_MODEL", "gpt-4o-mini")
+    resp = client.chat.completions.create(
+        model=modelo,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": instrucao},
+            {"role": "user", "content": f"Transcrição:\n{texto}"},
+        ],
+        temperature=0.7,
+        max_tokens=600,
+    )
+    conteudo = (
+        resp.choices[0].message.content
+        if getattr(resp, "choices", None)
+        and getattr(resp.choices[0], "message", None)
+        and resp.choices[0].message.content
+        else ""
+    )
+    data = _parse_json_safe(conteudo)
+    titulo = str(data.get("titulo", "")).strip()
+    legenda = str(data.get("legenda", "")).strip()
+    hashtags_raw = data.get("hashtags", [])
+    hashtags_list: List[str] = []
+    if isinstance(hashtags_raw, str):
+        partes = [p.strip() for p in hashtags_raw.replace(",", " ").split()]
+        hashtags_list = [p if p.startswith("#") else f"#{p}" for p in partes if p]
+    elif isinstance(hashtags_raw, list):
+        limpos: List[str] = []
+        for h in hashtags_raw:
+            if not isinstance(h, str):
+                continue
+            h2 = h.strip().replace(" ", "")
+            if not h2:
+                continue
+            if not h2.startswith("#"):
+                h2 = f"#{h2}"
+            limpos.append(h2)
+        hashtags_list = limpos
+    vistos = set()
+    unicos: List[str] = []
+    for h in hashtags_list:
+        k = h.lower()
+        if k not in vistos:
+            vistos.add(k)
+            unicos.append(h)
+    hashtags_final = unicos[:qtd_hashtags]
+    if not titulo:
+        titulo = "Título sugerido"
+    if not legenda:
+        legenda = "Legenda sugerida."
+    return {"titulo": titulo, "legenda": legenda, "hashtags": hashtags_final}
+
+def _conteudo_para_texto(conteudo: Dict[str, Any]) -> str:
+    titulo = str(conteudo.get("titulo", "")).strip()
+    legenda = str(conteudo.get("legenda", "")).strip()
+    hashtags = conteudo.get("hashtags", [])
+    if isinstance(hashtags, list):
+        hashtags_str = " ".join([str(h) for h in hashtags if isinstance(h, str)])
+    else:
+        hashtags_str = str(hashtags)
+    partes: List[str] = []
+    if titulo:
+        partes.append(f"Título: {titulo}")
+    if legenda:
+        partes.append("Legenda:")
+        partes.append(legenda)
+    if hashtags_str:
+        partes.append("")
+        partes.append("Hashtags:")
+        partes.append(hashtags_str)
+    return "\n".join(partes)
+
+def render_copy_download(conteudo: Dict[str, Any], key_suffix: str, file_name: str) -> None:
+    texto = _conteudo_para_texto(conteudo)
+    escapado = html.escape(texto)
+    text_id = f"copy_text_{key_suffix}"
+    status_id = f"copy_status_{key_suffix}"
+    btn_id = f"copy_btn_{key_suffix}"
+    st.markdown(
+        f'''
+<div>
+  <textarea id="{text_id}" style="position:absolute; left:-10000px; top:-10000px;">{escapado}</textarea>
+  <button id="{btn_id}">Copiar</button>
+  <span id="{status_id}" style="margin-left:8px;"></span>
+</div>
+<script>
+(function() {{
+  const btn = document.getElementById('{btn_id}');
+  const txt = document.getElementById('{text_id}');
+  const st = document.getElementById('{status_id}');
+  if (btn && txt) {{
+    btn.addEventListener('click', async () => {{
+      try {{
+        await navigator.clipboard.writeText(txt.value);
+        if (st) st.textContent = 'Copiado!';
+      }} catch (e) {{
+        try {{
+          txt.select(); document.execCommand('copy'); if (st) st.textContent = 'Copiado!';
+        }} catch(_) {{ if (st) st.textContent = 'Falha ao copiar'; }}
+      }}
+    }});
+  }}
+}})();
+</script>
+''',
+        unsafe_allow_html=True,
+    )
+    st.download_button(
+        label="Download .txt",
+        data=texto.encode("utf-8"),
+        file_name=file_name,
+        mime="text/plain",
+    )
 
 def transcreve_audio(arquivo_audio, prompt):
     """Transcreve áudio usando a API da OpenAI"""
@@ -112,7 +287,52 @@ def transcreve_tab_video():
                         st.success("✅ Transcrição concluída!")
                         st.write("### Resultado:")
                         st.write(transcricao)
+                        with st.spinner('🧠 Gerando título, legenda e hashtags...'):
+                            try:
+                                conteudo = gerar_conteudo_social(str(transcricao))
+                                st.write("### Conteúdo para redes sociais")
+                                st.write(f"Título: {conteudo.get('titulo', '')}")
+                                st.write("Legenda:")
+                                st.write(conteudo.get('legenda', ''))
+                                hashtags = conteudo.get('hashtags', [])
+                                if isinstance(hashtags, list) and hashtags:
+                                    st.write("Hashtags:")
+                                    st.write(' '.join(hashtags))
+                            except Exception as e:
+                                st.warning(f"Não foi possível gerar conteúdo social: {str(e)}")
+                        if 'conteudo' in locals():
+                            fname = f"conteudo_{arquivo_video.name}.txt" if hasattr(arquivo_video, 'name') else "conteudo_video.txt"
+                            render_copy_download(conteudo, "video_init", fname)
                         
+                        st.write("#### Personalizar conteúdo")
+                        colv1, colv2, colv3, colv4 = st.columns(4)
+                        plataformas_v = ["Instagram", "TikTok", "YouTube Shorts", "LinkedIn", "Facebook", "X/Twitter", "Threads"]
+                        with colv1:
+                            plataforma_sel_v = st.selectbox("Plataforma", plataformas_v, index=0, key='plataforma_video')
+                        with colv2:
+                            tom_sel_v = st.selectbox("Tom", ["engajador", "informativo", "profissional", "humorístico", "persuasivo"], index=0, key='tom_video')
+                        with colv3:
+                            tamanho_sel_v = st.selectbox("Tamanho da legenda", ["curta", "média", "longa"], index=1, key='tamanho_legenda_video')
+                        with colv4:
+                            qtd_sel_v = st.slider("Qtd hashtags", 5, 30, 15, key='qtd_hashtags_video')
+                        if st.button("Regenerar", key='regen_video'):
+                            with st.spinner('🧠 Regenerando...'):
+                                try:
+                                    conteudo_v = gerar_conteudo_social(str(transcricao), plataforma_sel_v, tom_sel_v, tamanho_sel_v, int(qtd_sel_v))
+                                    st.write("### Conteúdo para redes sociais (personalizado)")
+                                    st.write(f"Título: {conteudo_v.get('titulo', '')}")
+                                    st.write("Legenda:")
+                                    st.write(conteudo_v.get('legenda', ''))
+                                    hashtags_v = conteudo_v.get('hashtags', [])
+                                    if isinstance(hashtags_v, list) and hashtags_v:
+                                        st.write("Hashtags:")
+                                        st.write(' '.join(hashtags_v))
+                                except Exception as e:
+                                    st.warning(f"Não foi possível regenerar conteúdo social: {str(e)}")
+                            if 'conteudo_v' in locals():
+                                fname_v = f"conteudo_{arquivo_video.name}_personalizado.txt" if hasattr(arquivo_video, 'name') else "conteudo_video_personalizado.txt"
+                                render_copy_download(conteudo_v, "video_regen", fname_v)
+
                         # Opção para download do áudio extraído
                         with open(temp_audio_path, 'rb') as audio_file:
                             st.download_button(
@@ -154,6 +374,50 @@ def transcreve_tab_audio():
                 st.success("✅ Transcrição concluída!")
                 st.write("### Resultado:")
                 st.write(transcricao)
+                with st.spinner('🧠 Gerando título, legenda e hashtags...'):
+                    try:
+                        conteudo = gerar_conteudo_social(str(transcricao))
+                        st.write("### Conteúdo para redes sociais")
+                        st.write(f"Título: {conteudo.get('titulo', '')}")
+                        st.write("Legenda:")
+                        st.write(conteudo.get('legenda', ''))
+                        hashtags = conteudo.get('hashtags', [])
+                        if isinstance(hashtags, list) and hashtags:
+                            st.write("Hashtags:")
+                            st.write(' '.join(hashtags))
+                    except Exception as e:
+                        st.warning(f"Não foi possível gerar conteúdo social: {str(e)}")
+                if 'conteudo' in locals():
+                    fname_a = f"conteudo_{arquivo_audio.name}.txt" if hasattr(arquivo_audio, 'name') else "conteudo_audio.txt"
+                    render_copy_download(conteudo, "audio_init", fname_a)
+                st.write("#### Personalizar conteúdo")
+                col1, col2, col3, col4 = st.columns(4)
+                plataformas = ["Instagram", "TikTok", "YouTube Shorts", "LinkedIn", "Facebook", "X/Twitter", "Threads"]
+                with col1:
+                    plataforma_sel = st.selectbox("Plataforma", plataformas, index=0, key='plataforma_audio')
+                with col2:
+                    tom_sel = st.selectbox("Tom", ["engajador", "informativo", "profissional", "humorístico", "persuasivo"], index=0, key='tom_audio')
+                with col3:
+                    tamanho_sel = st.selectbox("Tamanho da legenda", ["curta", "média", "longa"], index=1, key='tamanho_legenda_audio')
+                with col4:
+                    qtd_sel = st.slider("Qtd hashtags", 5, 30, 15, key='qtd_hashtags_audio')
+                if st.button("Regenerar", key='regen_audio'):
+                    with st.spinner('🧠 Regenerando...'):
+                        try:
+                            conteudo2 = gerar_conteudo_social(str(transcricao), plataforma_sel, tom_sel, tamanho_sel, int(qtd_sel))
+                            st.write("### Conteúdo para redes sociais (personalizado)")
+                            st.write(f"Título: {conteudo2.get('titulo', '')}")
+                            st.write("Legenda:")
+                            st.write(conteudo2.get('legenda', ''))
+                            hashtags2 = conteudo2.get('hashtags', [])
+                            if isinstance(hashtags2, list) and hashtags2:
+                                st.write("Hashtags:")
+                                st.write(' '.join(hashtags2))
+                        except Exception as e:
+                            st.warning(f"Não foi possível regenerar conteúdo social: {str(e)}")
+                    if 'conteudo2' in locals():
+                        fname_a2 = f"conteudo_{arquivo_audio.name}_personalizado.txt" if hasattr(arquivo_audio, 'name') else "conteudo_audio_personalizado.txt"
+                        render_copy_download(conteudo2, "audio_regen", fname_a2)
             except Exception as e:
                 st.error(f"❌ Erro ao transcrever áudio: {str(e)}")
 
