@@ -257,6 +257,37 @@ def transcreve_tab_video():
         tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
         if tamanho_mb > 200:
             st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 200MB")
+            
+            # Mostra soluções alternativas
+            st.markdown("### 🛠️ Soluções para arquivos grandes:")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                **Opção 1: Comprimir online**
+                - [CloudConvert](https://cloudconvert.com/compress-mp4)
+                - [Online Video Compressor](https://online-video-compressor.com/)
+                - [FreeConvert](https://www.freeconvert.com/video-compressor)
+                
+                **Dica:** Reduza para 720p ou 480p para ficar abaixo de 200MB
+                """)
+            
+            with col2:
+                st.markdown("""
+                **Opção 2: Extrair áudio localmente**
+                Use FFmpeg no seu computador:
+                ```bash
+                ffmpeg -i seu_video.mp4 -vn -acodec libmp3lame -q:a 2 audio.mp3
+                ```
+                Depois faça upload do arquivo MP3 na aba "Áudio"
+                """)
+            
+            st.markdown("""
+            **Opção 3: Dividir o vídeo**
+            Use [Online Video Cutter](https://online-video-cutter.com/) para dividir em partes menores
+            """)
+            
             return
         
         # Aviso para arquivos grandes
