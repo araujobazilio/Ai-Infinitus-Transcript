@@ -253,14 +253,14 @@ def transcreve_tab_video():
     arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
     
     if arquivo_video is not None:
-        # Verifica tamanho do arquivo (limite de 1GB)
+        # Verifica tamanho do arquivo (limite de 200MB - Streamlit Cloud)
         tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
-        if tamanho_mb > 1024:
-            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 1GB (1024MB)")
+        if tamanho_mb > 200:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 200MB")
             return
         
         # Aviso para arquivos grandes
-        if tamanho_mb > 500:
+        if tamanho_mb > 100:
             st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
         
         with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
