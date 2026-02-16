@@ -253,45 +253,28 @@ def transcreve_tab_video():
     arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
     
     if arquivo_video is not None:
-        # Verifica tamanho do arquivo (limite de 200MB - Streamlit Cloud)
+        # Verifica tamanho do arquivo (limite de 25MB - Streamlit Cloud)
         tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
-        if tamanho_mb > 200:
-            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 200MB")
+        if tamanho_mb > 25:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 25MB")
             
-            # Mostra soluções alternativas
-            st.markdown("### 🛠️ Soluções para arquivos grandes:")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("""
-                **Opção 1: Comprimir online**
-                - [CloudConvert](https://cloudconvert.com/compress-mp4)
-                - [Online Video Compressor](https://online-video-compressor.com/)
-                - [FreeConvert](https://www.freeconvert.com/video-compressor)
-                
-                **Dica:** Reduza para 720p ou 480p para ficar abaixo de 200MB
-                """)
-            
-            with col2:
-                st.markdown("""
-                **Opção 2: Extrair áudio localmente**
-                Use FFmpeg no seu computador:
-                ```bash
-                ffmpeg -i seu_video.mp4 -vn -acodec libmp3lame -q:a 2 audio.mp3
-                ```
-                Depois faça upload do arquivo MP3 na aba "Áudio"
-                """)
+            # Mostra soluções alternativas para arquivos > 25MB
+            st.markdown("### 🛠️ Soluções para arquivos grandes (acima de 25MB):")
             
             st.markdown("""
-            **Opção 3: Dividir o vídeo**
-            Use [Online Video Cutter](https://online-video-cutter.com/) para dividir em partes menores
+            👉 **Opção 1: Comprimir o vídeo drasticamente ou usar apenas o áudio.**
+            
+            👉 **Opção 2: Extrair o áudio e fazer upload na aba 'Transcrever Áudio'.**
+            
+            👉 **Opção 3: Dividir o vídeo em clipes menores (cada um com menos de 25MB).**
+            
+            Devido a uma limitação da plataforma Streamlit Cloud, o tamanho máximo de upload é de 25MB.
             """)
             
             return
         
-        # Aviso para arquivos grandes
-        if tamanho_mb > 100:
+        # Aviso para arquivos grandes (entre 10MB e 25MB)
+        if tamanho_mb > 10:
             st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
         
         with st.spinner('🎬 Processando vídeo e extraindo áudio...'):
@@ -399,6 +382,17 @@ def transcreve_tab_audio():
     arquivo_audio = st.file_uploader('Selecione um arquivo de áudio', type=['mp3', 'wav', 'm4a', 'ogg'])
     
     if arquivo_audio is not None:
+        # Verifica tamanho do arquivo (limite de 25MB - Streamlit Cloud)
+        tamanho_mb = len(arquivo_audio.getvalue()) / (1024 * 1024)
+        if tamanho_mb > 25:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 25MB")
+            st.info("💡 Comprima o áudio ou divida em partes menores. Arquivos MP3 geralmente são menores que vídeos.")
+            return
+        
+        # Aviso para arquivos grandes (entre 10MB e 25MB)
+        if tamanho_mb > 10:
+            st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
+        
         with st.spinner('🎵 Transcrevendo áudio...'):
             try:
                 transcricao = transcreve_audio(arquivo_audio, prompt_input)
