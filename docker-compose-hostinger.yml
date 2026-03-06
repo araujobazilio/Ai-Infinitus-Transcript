@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  app:
+    image: rafael037/ai-infinitus-transcript:latest
+    container_name: ai-infinitus-transcript
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./temp:/app/temp
+    env_file:
+      - .env
+    restart: unless-stopped
