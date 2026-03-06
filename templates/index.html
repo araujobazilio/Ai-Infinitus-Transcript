@@ -69,6 +69,7 @@
                             <option value="Instagram">Instagram</option>
                             <option value="TikTok">TikTok</option>
                             <option value="YouTube Shorts">YouTube Shorts</option>
+                            <option value="YouTube">YouTube</option>
                             <option value="LinkedIn">LinkedIn</option>
                             <option value="Facebook">Facebook</option>
                             <option value="X/Twitter">X/Twitter</option>
@@ -105,6 +106,7 @@
 
         <div id="loading" class="loading">
             <p>⏳ Processando... Isso pode levar alguns minutos.</p>
+            <progress id="progress" max="100" value="30" style="width:100%;"></progress>
         </div>
 
         <div id="error" class="error"></div>
@@ -169,17 +171,21 @@
             submitBtn.disabled = true;
 
             const formData = new FormData(form);
+            const progress = document.getElementById('progress');
+            if (progress) progress.value = 30;
             try {
                 const response = await fetch('/transcrever', {
                     method: 'POST',
                     body: formData,
                 });
+                if (progress) progress.value = 70;
                 if (!response.ok) {
                     const err = await response.json();
                     throw new Error(err.detail || 'Erro desconhecido');
                 }
                 const data = await response.json();
                 displayResult(data);
+                if (progress) progress.value = 100;
             } catch (err) {
                 error.textContent = err.message;
             } finally {
@@ -198,9 +204,14 @@
 
         function copyText(id) {
             const textarea = document.getElementById(id);
-            textarea.select();
-            document.execCommand('copy');
-            alert('Copiado!');
+            const text = textarea.value;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Copiado!');
+            }).catch(() => {
+                textarea.select();
+                document.execCommand('copy');
+                alert('Copiado!');
+            });
         }
 
         function downloadText(id, filename) {
@@ -219,7 +230,15 @@
             const legenda = document.getElementById('legenda').textContent;
             const hashtags = document.getElementById('hashtags').textContent;
             const text = `Título: ${titulo}\n\nLegenda:\n${legenda}\n\nHashtags:\n${hashtags}`;
-            navigator.clipboard.writeText(text).then(() => alert('Conteúdo copiado!'));
+            navigator.clipboard.writeText(text).then(() => alert('Conteúdo copiado!')).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                alert('Conteúdo copiado!');
+            });
         }
 
         function downloadSocial() {
