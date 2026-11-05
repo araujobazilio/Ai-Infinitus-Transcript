@@ -1,4 +1,5 @@
 import os
+import math
 import tempfile
 import shutil
 from pathlib import Path
@@ -22,6 +23,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 PASTA_TEMP = Path("temp")
 PASTA_TEMP.mkdir(exist_ok=True)
 
+# A API de transcrição da OpenAI aceita no máximo 25MB por requisição; usa 24MB como margem
+MAX_AUDIO_API_BYTES = 24 * 1024 * 1024
+
 # Templates
 templates = Jinja2Templates(directory="templates")
 
@@ -38,6 +42,7 @@ def gerar_conteudo_social(
     tom: str = "engajador",
     tamanho_legenda: str = "média",
     qtd_hashtags: int = 15,
+    cta: str = "",
 ) -> Dict[str, Any]:
     if not isinstance(transcricao, str):
         raise ValueError("transcricao inválida")
@@ -58,6 +63,7 @@ def gerar_conteudo_social(
         qtd_hashtags = 10
     if qtd_hashtags > 30:
         qtd_hashtags = 30
+    cta_texto = cta.strip()
     instrucao = (
         "Gere conteúdo para redes sociais em pt-BR com base na transcrição fornecida. "
         "Adapte ao contexto da plataforma, mantendo alto potencial de engajamento e clareza. "
@@ -66,7 +72,8 @@ def gerar_conteudo_social(
         "titulo (string), legenda (string), hashtags (array de strings). "
         f"plataforma={plataforma}; tom={tom}; tamanho_legenda={tamanho_legenda}; qtd_hashtags={qtd_hashtags}. "
         "Use hashtags relevantes, em minúsculas e sem acentos, com prefixo '#', sem espaços. "
-        "Evite clickbait enganoso; foque no benefício e na curiosidade legítima."
+        "Evite clickbait enganoso; foque no benefício e na curiosidade legítima. "
+        + (f"Inclua uma chamada para ação coerente com: '{cta_texto}'. " if cta_texto else "")
     )
     modelo = os.getenv("OPENAI_CONTENT_MODEL", "gpt-4o-mini")
     resp = client.chat.completions.create(
@@ -138,13 +145,57 @@ def extrair_audio_com_ffmpeg(video_path: str, audio_path: str) -> tuple[bool, st
         (
             ffmpeg
             .input(video_path)
-            .output(audio_path, acodec="mp3")
+            .output(audio_path, acodec="mp3", audio_bitrate="48k", ac=1, ar=16000)
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
         return True, ""
     except ffmpeg.Error as e:
         return False, e.stderr.decode() if e.stderr else str(e)
+
+def duracao_midia(caminho: str) -> float:
+    try:
+        probe = ffmpeg.probe(caminho)
+        return float(probe.get("format", {}).get("duration", 0))
+    except Exception:
+        return 0.0
+
+def dividir_audio_ffmpeg(caminho_audio: str, pasta: Path, duracao_segmento: float) -> List[Path]:
+    padrao = str(pasta / "chunk_%04d.mp3")
+    (
+        ffmpeg
+        .input(caminho_audio)
+        .output(padrao, f="segment", segment_time=duracao_segmento, acodec="copy")
+        .overwrite_output()
+        .run(capture_stdout=True, capture_stderr=True)
+    )
+    return sorted(pasta.glob("chunk_*.mp3"))
+
+def transcreve_arquivo(caminho: Path, prompt: str = "") -> str:
+    tamanho = caminho.stat().st_size
+    if tamanho <= MAX_AUDIO_API_BYTES:
+        with open(caminho, "rb") as f:
+            return transcreve_audio(f, prompt)
+
+    duracao = duracao_midia(str(caminho))
+    if duracao <= 0:
+        raise HTTPException(status_code=500, detail="Não foi possível determinar a duração do áudio.")
+
+    n_partes = math.ceil(tamanho / (MAX_AUDIO_API_BYTES * 0.9))
+    duracao_segmento = duracao / n_partes
+    pasta_chunks = caminho.parent / "chunks"
+    pasta_chunks.mkdir(exist_ok=True)
+    try:
+        partes = dividir_audio_ffmpeg(str(caminho), pasta_chunks, duracao_segmento)
+    except ffmpeg.Error as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao dividir o áudio: {e.stderr.decode() if e.stderr else e}")
+
+    transcricoes: List[str] = []
+    for i, parte in enumerate(partes):
+        contexto = prompt if i == 0 else transcricoes[-1][-200:]
+        with open(parte, "rb") as f:
+            transcricoes.append(transcreve_audio(f, contexto))
+    return " ".join(t.strip() for t in transcricoes if t)
 
 def baixar_arquivo_url(url: str, destino: Path) -> bool:
     try:
@@ -173,6 +224,7 @@ async def transcrever(
     tom: str = Form("engajador"),
     tamanho_legenda: str = Form("média"),
     qtd_hashtags: int = Form(15),
+    cta: str = Form(""),
 ):
     if not arquivo and not url:
         raise HTTPException(status_code=400, detail="Envie um arquivo ou uma URL.")
@@ -212,14 +264,20 @@ async def transcrever(
                 raise HTTPException(status_code=500, detail=f"Erro ao extrair áudio: {erro}")
             arquivo_transcrever = audio_path
         elif ext in [".mp3", ".wav", ".m4a", ".ogg"]:
-            # Áudio direto
-            arquivo_transcrever = arquivo_path
+            # Áudio direto: recomprime se exceder o limite da API
+            if arquivo_path.stat().st_size > MAX_AUDIO_API_BYTES:
+                audio_comprimido = Path(temp_dir) / "audio_comprimido.mp3"
+                sucesso, erro = extrair_audio_com_ffmpeg(str(arquivo_path), str(audio_comprimido))
+                if not sucesso:
+                    raise HTTPException(status_code=500, detail=f"Erro ao comprimir áudio: {erro}")
+                arquivo_transcrever = audio_comprimido
+            else:
+                arquivo_transcrever = arquivo_path
         else:
             raise HTTPException(status_code=400, detail="Formato não suportado.")
         
-        # Transcrever
-        with open(arquivo_transcrever, "rb") as f:
-            transcricao = transcreve_audio(f, prompt)
+        # Transcrever (divide em partes se ainda exceder o limite da API)
+        transcricao = transcreve_arquivo(arquivo_transcrever, prompt)
         
         # Gerar conteúdo social
         conteudo_social = gerar_conteudo_social(
@@ -228,6 +286,7 @@ async def transcrever(
             tom,
             tamanho_legenda,
             qtd_hashtags,
+            cta,
         )
         
         return {

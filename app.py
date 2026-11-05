@@ -6,6 +6,7 @@ import os
 import tempfile
 import subprocess
 import shutil
+import math
 import json
 import html
 from typing import Any, Dict, List
@@ -16,6 +17,9 @@ _ = load_dotenv(find_dotenv())
 PASTA_TEMP = Path(__file__).parent / 'temp'
 PASTA_TEMP.mkdir(exist_ok=True)
 ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
+
+# A API de transcrição da OpenAI aceita no máximo 25MB por requisição; usa 24MB como margem
+LIMITE_API_AUDIO = 24 * 1024 * 1024
 
 # Inicializa o cliente OpenAI com a chave API
 api_key = os.getenv('OPENAI_API_KEY')
@@ -208,6 +212,60 @@ def transcreve_audio(arquivo_audio, prompt):
     )
     return transcricao
 
+def duracao_midia_ffprobe(caminho):
+    """Retorna a duração em segundos de um arquivo de mídia via ffprobe"""
+    if not shutil.which('ffprobe'):
+        return 0.0
+    resultado = subprocess.run(
+        [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            caminho,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        return float(resultado.stdout.strip())
+    except Exception:
+        return 0.0
+
+def transcreve_arquivo_audio(caminho_audio, prompt):
+    """Transcreve arquivo de áudio, dividindo em partes se exceder o limite da API"""
+    tamanho = os.path.getsize(caminho_audio)
+    if tamanho <= LIMITE_API_AUDIO:
+        with open(caminho_audio, 'rb') as arquivo:
+            return transcreve_audio(arquivo, prompt)
+
+    duracao = duracao_midia_ffprobe(caminho_audio)
+    if duracao <= 0:
+        raise RuntimeError('Não foi possível determinar a duração do áudio')
+
+    n_partes = math.ceil(tamanho / (LIMITE_API_AUDIO * 0.9))
+    duracao_segmento = duracao / n_partes
+    pasta = Path(caminho_audio).parent
+    padrao = str(pasta / 'chunk_%04d.mp3')
+    subprocess.run(
+        [
+            'ffmpeg', '-i', caminho_audio,
+            '-f', 'segment',
+            '-segment_time', str(duracao_segmento),
+            '-acodec', 'copy',
+            '-y', padrao,
+        ],
+        capture_output=True,
+        check=True,
+    )
+    partes = sorted(pasta.glob('chunk_*.mp3'))
+    textos = []
+    for i, parte in enumerate(partes):
+        contexto = prompt if i == 0 else textos[-1][-200:]
+        with open(parte, 'rb') as arquivo:
+            textos.append(transcreve_audio(arquivo, contexto))
+        os.unlink(parte)
+    return ' '.join(t.strip() for t in textos if t)
+
 def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
     """Extrai áudio de vídeo usando FFmpeg"""
     try:
@@ -221,8 +279,9 @@ def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
             '-i', caminho_video,
             '-vn',  # Sem vídeo
             '-acodec', 'mp3',  # Codec de áudio MP3
-            '-ab', '192k',  # Bitrate
-            '-ar', '44100',  # Sample rate
+            '-ab', '48k',  # Bitrate reduzido (suficiente para fala)
+            '-ac', '1',  # Mono
+            '-ar', '16000',  # Sample rate (Whisper resamplea para 16kHz)
             '-y',  # Sobrescrever arquivo se existir
             caminho_audio
         ]
@@ -295,8 +354,7 @@ def transcreve_tab_video():
                     
                     # Transcreve o áudio
                     with st.spinner('🎵 Transcrevendo áudio...'):
-                        with open(temp_audio_path, 'rb') as audio_file:
-                            transcricao = transcreve_audio(audio_file, prompt_input)
+                        transcricao = transcreve_arquivo_audio(temp_audio_path, prompt_input)
                         
                         st.success("✅ Transcrição concluída!")
                         st.write("### Resultado:")
