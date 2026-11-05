@@ -45,11 +45,11 @@ docker-compose logs -f
 ```
 
 ### 6. Acessar o app
-- URL: `http://<IP_DA_VPS>:8501`
-- O upload de até 1 GB estará disponível (configurado em `.streamlit/config.toml`).
+- URL: `http://<IP_DA_VPS>:8000`
+- O upload de até 1 GB estará disponível.
 
 ## Proxy reverso (opcional)
-Para HTTPS e domínio personalizado, configure nginx ou Caddy apontando para `http://localhost:8501`.
+Para HTTPS e domínio personalizado, configure nginx ou Caddy apontando para `http://localhost:8000`.
 
 ## Manutenção
 - Parar: `docker-compose down`

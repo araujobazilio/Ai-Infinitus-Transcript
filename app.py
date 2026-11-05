@@ -9,6 +9,7 @@ import shutil
 import math
 import json
 import html
+import uuid
 from typing import Any, Dict, List
 
 # Carrega as variáveis de ambiente
@@ -20,6 +21,13 @@ ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
 
 # A API de transcrição da OpenAI aceita no máximo 25MB por requisição; usa 24MB como margem
 LIMITE_API_AUDIO = 24 * 1024 * 1024
+
+# Limite de upload do Streamlit (definido em .streamlit/config.toml)
+LIMITE_UPLOAD_MB = 1024
+
+# Blocos de ~50min reencodados a 48kbps geram partes de ~18MB, sempre abaixo do limite,
+# independentemente da duração reportada nos metadados do arquivo
+SEGMENTO_SEGUNDOS = 50 * 60
 
 # Inicializa o cliente OpenAI com a chave API
 api_key = os.getenv('OPENAI_API_KEY')
@@ -231,39 +239,67 @@ def duracao_midia_ffprobe(caminho):
     except Exception:
         return 0.0
 
+def _segmentar_audio(caminho_audio, pasta, duracao_segmento, reencode):
+    """Segmenta o áudio com ffmpeg; retorna lista de partes geradas (vazia em caso de erro)"""
+    prefixo = f'chunk_{uuid.uuid4().hex[:8]}'
+    padrao = str(pasta / f'{prefixo}_%04d.mp3')
+    comando = [
+        'ffmpeg', '-i', str(caminho_audio),
+        '-f', 'segment',
+        '-segment_time', str(duracao_segmento),
+    ]
+    if reencode:
+        comando += ['-acodec', 'libmp3lame', '-ab', '48k', '-ac', '1', '-ar', '16000']
+    else:
+        comando += ['-acodec', 'copy']
+    comando += ['-y', padrao]
+    resultado = subprocess.run(comando, capture_output=True)
+    if resultado.returncode != 0:
+        return []
+    return sorted(pasta.glob(f'{prefixo}_*.mp3'))
+
+def _dividir_ate_limite(caminho_audio, pasta, profundidade=0):
+    """Divide o áudio recursivamente até que cada parte fique abaixo do limite da API"""
+    caminho_audio = Path(caminho_audio)
+    if caminho_audio.stat().st_size <= LIMITE_API_AUDIO:
+        return [caminho_audio]
+    if profundidade >= 4:
+        raise RuntimeError('Não foi possível dividir o áudio abaixo do limite da API')
+
+    duracao = duracao_midia_ffprobe(str(caminho_audio))
+    if duracao > 0 and profundidade == 0:
+        n_partes = math.ceil(caminho_audio.stat().st_size / (LIMITE_API_AUDIO * 0.9))
+        segmento, reencode = duracao / n_partes, False
+    else:
+        segmento, reencode = SEGMENTO_SEGUNDOS, True
+
+    partes = _segmentar_audio(caminho_audio, pasta, segmento, reencode)
+    if not partes and not reencode:
+        partes = _segmentar_audio(caminho_audio, pasta, SEGMENTO_SEGUNDOS, True)
+    if not partes:
+        raise RuntimeError('A divisão do áudio não gerou nenhuma parte')
+
+    finais = []
+    for parte in partes:
+        finais.extend(_dividir_ate_limite(parte, pasta, profundidade + 1))
+    return finais
+
 def transcreve_arquivo_audio(caminho_audio, prompt):
     """Transcreve arquivo de áudio, dividindo em partes se exceder o limite da API"""
-    tamanho = os.path.getsize(caminho_audio)
-    if tamanho <= LIMITE_API_AUDIO:
+    partes = _dividir_ate_limite(caminho_audio, Path(caminho_audio).parent)
+    if len(partes) == 1 and partes[0] == Path(caminho_audio):
         with open(caminho_audio, 'rb') as arquivo:
             return transcreve_audio(arquivo, prompt)
 
-    duracao = duracao_midia_ffprobe(caminho_audio)
-    if duracao <= 0:
-        raise RuntimeError('Não foi possível determinar a duração do áudio')
-
-    n_partes = math.ceil(tamanho / (LIMITE_API_AUDIO * 0.9))
-    duracao_segmento = duracao / n_partes
-    pasta = Path(caminho_audio).parent
-    padrao = str(pasta / 'chunk_%04d.mp3')
-    subprocess.run(
-        [
-            'ffmpeg', '-i', caminho_audio,
-            '-f', 'segment',
-            '-segment_time', str(duracao_segmento),
-            '-acodec', 'copy',
-            '-y', padrao,
-        ],
-        capture_output=True,
-        check=True,
-    )
-    partes = sorted(pasta.glob('chunk_*.mp3'))
     textos = []
     for i, parte in enumerate(partes):
         contexto = prompt if i == 0 else textos[-1][-200:]
         with open(parte, 'rb') as arquivo:
             textos.append(transcreve_audio(arquivo, contexto))
-        os.unlink(parte)
+        try:
+            os.unlink(parte)
+        except OSError:
+            pass
     return ' '.join(t.strip() for t in textos if t)
 
 def extrair_audio_com_ffmpeg(caminho_video, caminho_audio):
@@ -312,27 +348,13 @@ def transcreve_tab_video():
     arquivo_video = st.file_uploader('Selecione um arquivo de vídeo', type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
     
     if arquivo_video is not None:
-        # Verifica tamanho do arquivo (limite de 25MB - Streamlit Cloud)
+        # Verifica tamanho do arquivo (limite de upload configurado no Streamlit)
         tamanho_mb = len(arquivo_video.getvalue()) / (1024 * 1024)
-        if tamanho_mb > 25:
-            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 25MB")
-            
-            # Mostra soluções alternativas para arquivos > 25MB
-            st.markdown("### 🛠️ Soluções para arquivos grandes (acima de 25MB):")
-            
-            st.markdown("""
-            👉 **Opção 1: Comprimir o vídeo drasticamente ou usar apenas o áudio.**
-            
-            👉 **Opção 2: Extrair o áudio e fazer upload na aba 'Transcrever Áudio'.**
-            
-            👉 **Opção 3: Dividir o vídeo em clipes menores (cada um com menos de 25MB).**
-            
-            Devido a uma limitação da plataforma Streamlit Cloud, o tamanho máximo de upload é de 25MB.
-            """)
-            
+        if tamanho_mb > LIMITE_UPLOAD_MB:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: {LIMITE_UPLOAD_MB}MB")
             return
         
-        # Aviso para arquivos grandes (entre 10MB e 25MB)
+        # Aviso para arquivos grandes
         if tamanho_mb > 10:
             st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
         
@@ -437,23 +459,33 @@ def transcreve_tab_audio():
     st.info("🎵 Faça upload de um arquivo de áudio (.mp3, .wav, .m4a) para transcrição")
     
     prompt_input = st.text_input('(opcional) Digite um prompt para melhorar a transcrição', key='input_audio')
-    arquivo_audio = st.file_uploader('Selecione um arquivo de áudio', type=['mp3', 'wav', 'm4a', 'ogg'])
+    arquivo_audio = st.file_uploader('Selecione um arquivo de áudio', type=['mp3', 'wav', 'm4a', 'ogg', 'opus', 'flac', 'aac'])
     
     if arquivo_audio is not None:
-        # Verifica tamanho do arquivo (limite de 25MB - Streamlit Cloud)
+        # Verifica tamanho do arquivo (limite de upload configurado no Streamlit)
         tamanho_mb = len(arquivo_audio.getvalue()) / (1024 * 1024)
-        if tamanho_mb > 25:
-            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: 25MB")
-            st.info("💡 Comprima o áudio ou divida em partes menores. Arquivos MP3 geralmente são menores que vídeos.")
+        if tamanho_mb > LIMITE_UPLOAD_MB:
+            st.error(f"❌ Arquivo muito grande ({tamanho_mb:.1f}MB). Limite: {LIMITE_UPLOAD_MB}MB")
             return
         
-        # Aviso para arquivos grandes (entre 10MB e 25MB)
+        # Aviso para arquivos grandes
         if tamanho_mb > 10:
             st.warning(f"⚠️ Arquivo grande ({tamanho_mb:.1f}MB). O processamento pode demorar alguns minutos.")
         
         with st.spinner('🎵 Transcrevendo áudio...'):
             try:
-                transcricao = transcreve_audio(arquivo_audio, prompt_input)
+                # Salva em arquivo temporário para poder comprimir/dividir se exceder o limite da API
+                suffix = Path(arquivo_audio.name).suffix if arquivo_audio.name else '.mp3'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_audio:
+                    tmp_audio.write(arquivo_audio.getvalue())
+                    tmp_audio_path = tmp_audio.name
+                try:
+                    transcricao = transcreve_arquivo_audio(tmp_audio_path, prompt_input)
+                finally:
+                    try:
+                        os.unlink(tmp_audio_path)
+                    except OSError:
+                        pass
                 st.success("✅ Transcrição concluída!")
                 st.write("### Resultado:")
                 st.write(transcricao)

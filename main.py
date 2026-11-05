@@ -2,6 +2,7 @@ import os
 import math
 import tempfile
 import shutil
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
@@ -25,6 +26,10 @@ PASTA_TEMP.mkdir(exist_ok=True)
 
 # A API de transcrição da OpenAI aceita no máximo 25MB por requisição; usa 24MB como margem
 MAX_AUDIO_API_BYTES = 24 * 1024 * 1024
+
+# Blocos de ~50min reencodados a 48kbps geram partes de ~18MB, sempre abaixo do limite,
+# independentemente da duração reportada nos metadados do arquivo
+SEGMENTO_SEGUNDOS = 50 * 60
 
 # Templates
 templates = Jinja2Templates(directory="templates")
@@ -160,35 +165,57 @@ def duracao_midia(caminho: str) -> float:
     except Exception:
         return 0.0
 
-def dividir_audio_ffmpeg(caminho_audio: str, pasta: Path, duracao_segmento: float) -> List[Path]:
-    padrao = str(pasta / "chunk_%04d.mp3")
+def dividir_audio_ffmpeg(caminho_audio: str, pasta: Path, duracao_segmento: float, reencode: bool = False) -> List[Path]:
+    prefixo = f"chunk_{uuid.uuid4().hex[:8]}"
+    padrao = str(pasta / f"{prefixo}_%04d.mp3")
+    kwargs = {"f": "segment", "segment_time": duracao_segmento}
+    if reencode:
+        kwargs.update(acodec="libmp3lame", audio_bitrate="48k", ac=1, ar=16000)
+    else:
+        kwargs["acodec"] = "copy"
     (
         ffmpeg
         .input(caminho_audio)
-        .output(padrao, f="segment", segment_time=duracao_segmento, acodec="copy")
+        .output(padrao, **kwargs)
         .overwrite_output()
         .run(capture_stdout=True, capture_stderr=True)
     )
-    return sorted(pasta.glob("chunk_*.mp3"))
+    return sorted(pasta.glob(f"{prefixo}_*.mp3"))
 
-def transcreve_arquivo(caminho: Path, prompt: str = "") -> str:
-    tamanho = caminho.stat().st_size
-    if tamanho <= MAX_AUDIO_API_BYTES:
-        with open(caminho, "rb") as f:
-            return transcreve_audio(f, prompt)
+def _dividir_ate_limite(caminho: Path, pasta: Path, profundidade: int = 0) -> List[Path]:
+    """Divide o áudio recursivamente até que cada parte fique abaixo do limite da API."""
+    if caminho.stat().st_size <= MAX_AUDIO_API_BYTES:
+        return [caminho]
+    if profundidade >= 4:
+        raise HTTPException(status_code=500, detail="Não foi possível dividir o áudio abaixo do limite da API.")
 
     duracao = duracao_midia(str(caminho))
-    if duracao <= 0:
-        raise HTTPException(status_code=500, detail="Não foi possível determinar a duração do áudio.")
+    if duracao > 0 and profundidade == 0:
+        n_partes = math.ceil(caminho.stat().st_size / (MAX_AUDIO_API_BYTES * 0.9))
+        segmento, reencode = duracao / n_partes, False
+    else:
+        segmento, reencode = SEGMENTO_SEGUNDOS, True
+    try:
+        partes = dividir_audio_ffmpeg(str(caminho), pasta, segmento, reencode)
+    except ffmpeg.Error as e:
+        if reencode:
+            raise HTTPException(status_code=500, detail=f"Erro ao dividir o áudio: {e.stderr.decode() if e.stderr else e}")
+        try:
+            partes = dividir_audio_ffmpeg(str(caminho), pasta, SEGMENTO_SEGUNDOS, reencode=True)
+        except ffmpeg.Error as e2:
+            raise HTTPException(status_code=500, detail=f"Erro ao dividir o áudio: {e2.stderr.decode() if e2.stderr else e2}")
+    if not partes:
+        raise HTTPException(status_code=500, detail="A divisão do áudio não gerou nenhuma parte.")
 
-    n_partes = math.ceil(tamanho / (MAX_AUDIO_API_BYTES * 0.9))
-    duracao_segmento = duracao / n_partes
+    partes_finais: List[Path] = []
+    for parte in partes:
+        partes_finais.extend(_dividir_ate_limite(parte, pasta, profundidade + 1))
+    return partes_finais
+
+def transcreve_arquivo(caminho: Path, prompt: str = "") -> str:
     pasta_chunks = caminho.parent / "chunks"
     pasta_chunks.mkdir(exist_ok=True)
-    try:
-        partes = dividir_audio_ffmpeg(str(caminho), pasta_chunks, duracao_segmento)
-    except ffmpeg.Error as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao dividir o áudio: {e.stderr.decode() if e.stderr else e}")
+    partes = _dividir_ate_limite(caminho, pasta_chunks)
 
     transcricoes: List[str] = []
     for i, parte in enumerate(partes):
@@ -246,7 +273,7 @@ async def transcrever(
                 raise HTTPException(status_code=400, detail="URL inválida.")
             # Tentar inferir sufixo pela URL
             suffix = ".mp4"  # padrão
-            if any(ext in url.lower() for ext in [".mp3", ".wav", ".m4a", ".ogg"]):
+            if any(ext in url.lower() for ext in [".mp3", ".wav", ".m4a", ".ogg", ".opus", ".flac", ".aac"]):
                 suffix = ".mp3"
             elif any(ext in url.lower() for ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]):
                 suffix = ".mp4"
@@ -263,7 +290,7 @@ async def transcrever(
             if not sucesso:
                 raise HTTPException(status_code=500, detail=f"Erro ao extrair áudio: {erro}")
             arquivo_transcrever = audio_path
-        elif ext in [".mp3", ".wav", ".m4a", ".ogg"]:
+        elif ext in [".mp3", ".wav", ".m4a", ".ogg", ".opus", ".flac", ".aac"]:
             # Áudio direto: recomprime se exceder o limite da API
             if arquivo_path.stat().st_size > MAX_AUDIO_API_BYTES:
                 audio_comprimido = Path(temp_dir) / "audio_comprimido.mp3"
